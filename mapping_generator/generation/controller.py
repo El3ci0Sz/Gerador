@@ -170,12 +170,17 @@ class GenerationTask:
             except Exception as e:
                 logger.error(f"Error generating random CGRA map: {e}", exc_info=True)
         return saved_graph_count == self.k
-    
+
     def _run_qca_grammar(self) -> bool:
-        """Executes grammar-based generation for QCA."""
+        """Executes grammar-based generation for QCA with a robust retry loop."""
+
         logger.info(f"Starting QCA grammar task: k={self.k}, arch_type={self.qca_arch}")
         saved_graph_count = 0
-        for i in range(self.k):
+        total_attempts = 0
+        max_total_attempts = self.k * self.retries_multiplier
+
+        while saved_graph_count < self.k and total_attempts < max_total_attempts:
+            total_attempts += 1
             try:
                 arch_size = random.choice(self.arch_sizes)
                 target_nodes = random.randint(self.graph_range[0], self.graph_range[1])
@@ -196,10 +201,15 @@ class GenerationTask:
                 if final_graph:
                     saved_graph_count += 1
                     logger.info(f"Valid QCA grammar graph {saved_graph_count}/{self.k} generated. Saving...")
-                    self._prepare_and_save(final_graph, "QCA", "mappings_qca_grammar", arch_size, saved_graph_count)
+                    self._prepare_and_save(final_graph, "QCA", "op", arch_size, saved_graph_count)
+
             except Exception as e:
                 logger.error(f"Critical error during QCA grammar generation: {e}", exc_info=True)
-        return saved_graph_count == self.k
+        
+        if saved_graph_count < self.k:
+            logger.warning(f"QCA task finished but only generated {saved_graph_count}/{self.k} graphs.")
+            
+        return saved_graph_count >= self.k   
 
     def _prepare_and_save(self, graph, tec_name, base_folder, arch_size, index, name_prefix: str = 'op', **kwargs):
         """Assigns logical names with a specific prefix to nodes and triggers the save process."""
