@@ -1,0 +1,12 @@
+-Separar melhor os diretorios, colocar cada coisa nos diretorios certos
+-Conferir a parte de QCA, CGRA com grammar
+-Conferir a parte de CGRA com random
+-Testar os parametros (parses) para ver se esta tudo ok
+-Conferir se nao da para adicionar mais parsers uteis
+-Ver o que é nescessario e o que nao do codigo para tirar
+-Colocar comentarios (Manualmente de preferencia)
+-Conferir as logicas
+-Documentar o codigo
+-Nova classe para complixidade tirar do map controler e fazer um controlador de complexidade
+-(opicional) Fazer mais testes
+-O gerador produz, por exemplo, grafos de tamanho 4 em uma arquitetura 4x4 com II=2?
