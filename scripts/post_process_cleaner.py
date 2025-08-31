@@ -20,20 +20,8 @@ def load_graph_from_dot(file_path: str) -> nx.DiGraph | None:
 def process_and_copy_unique_files(source_dir: str, dest_dir: str) -> int:
     """Worker to process a directory, find unique graphs, and copy their files."""
     logging.info(f"Processing directory: {os.path.basename(source_dir)}")
-    
     dot_files = [os.path.join(source_dir, f) for f in os.listdir(source_dir) if f.endswith('.dot')]
-    
-    if len(dot_files) < 2:
-        if dot_files:
-            os.makedirs(dest_dir, exist_ok=True)
-            base_name = os.path.splitext(dot_files[0])[0]
-            try:
-                shutil.copy2(f"{base_name}.dot", dest_dir)
-                shutil.copy2(f"{base_name}.json", dest_dir)
-                return 1
-            except FileNotFoundError:
-                logging.warning(f"JSON file for {base_name}.dot not found.")
-        return 0
+    if len(dot_files) < 1: return 0
 
     groups = defaultdict(list)
     for file_path in dot_files:
@@ -43,21 +31,15 @@ def process_and_copy_unique_files(source_dir: str, dest_dir: str) -> int:
             groups[key].append((file_path, graph))
 
     unique_files_to_copy = []
-    for key, items in groups.items():
-        if not items: continue
-        
+    for items in groups.values():
         unique_graphs_in_group = []
         for file_path, graph in items:
-            is_isomorphic = any(
-                nx.algorithms.isomorphism.GraphMatcher(graph, unique_graph).is_isomorphic()
-                for _, unique_graph in unique_graphs_in_group
-            )
+            is_isomorphic = any(nx.algorithms.isomorphism.GraphMatcher(graph, ug).is_isomorphic() for _, ug in unique_graphs_in_group)
             if not is_isomorphic:
                 unique_graphs_in_group.append((file_path, graph))
                 unique_files_to_copy.append(file_path)
 
-    if not unique_files_to_copy:
-        return 0
+    if not unique_files_to_copy: return 0
         
     os.makedirs(dest_dir, exist_ok=True)
     for file_path in unique_files_to_copy:
@@ -73,17 +55,10 @@ def process_and_copy_unique_files(source_dir: str, dest_dir: str) -> int:
     logging.info(f"Directory '{os.path.basename(dest_dir)}' finished. Copied {len(unique_files_to_copy)} unique graphs.")
     return len(unique_files_to_copy)
 
-def main():
-    """Main function to orchestrate the cleaning and copying process."""
-    parser = argparse.ArgumentParser(
-        description="Cleans a result directory by keeping only non-isomorphic graphs and copies their .dot and .json files to a new directory."
-    )
-    parser.add_argument("source_dir", help="The root directory with the generated results.")
-    parser.add_argument("dest_dir", help="The new directory where cleaned results will be saved.")
-    args = parser.parse_args()
-
-    source_path = os.path.abspath(args.source_dir)
-    dest_path = os.path.abspath(args.dest_dir)
+def run_cleaning_process(source_dir: str, dest_dir: str):
+    """Orchestrates the cleaning and copying process."""
+    source_path = os.path.abspath(source_dir)
+    dest_path = os.path.abspath(dest_dir)
 
     if not os.path.isdir(source_path):
         print(f"Error: Source directory '{source_path}' does not exist.")
@@ -115,8 +90,16 @@ def main():
             except Exception as e:
                 logging.error(f"A processing task raised an error: {e}", exc_info=True)
 
-    print("\n--- Process Complete ---")
+    print("\n--- Cleaning Process Complete ---")
     print(f"Total of {total_unique_graphs} unique graphs copied to '{dest_path}'.")
+
+def main():
+    """Main function to handle command-line execution."""
+    parser = argparse.ArgumentParser(description="Cleans a result directory by keeping only non-isomorphic graphs.")
+    parser.add_argument("source_dir", help="The root directory with the generated results.")
+    parser.add_argument("dest_dir", help="The new directory where cleaned results will be saved.")
+    args = parser.parse_args()
+    run_cleaning_process(args.source_dir, args.dest_dir)
 
 if __name__ == "__main__":
     main()

@@ -1,2 +1,26 @@
 outros/
+README.md
+tutorial
+Documentation
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*build/
+*dist/
+*.egg-info/
+venv/
+.env
+
+# Output files
+results/
+results_campaign/
+test_results/
+*.png
+*.csv
+*.dot
+*.json
+nohup.out
+*.log
 

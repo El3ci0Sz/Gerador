@@ -7,11 +7,12 @@ import logging
 from math import ceil
 import networkx as nx
 
-from ..architectures.cgra import Interconnection as CGRAInterconnection
+from ..architectures.cgra import CgraArch
 from ..architectures.qca import QCA
 from ..utils.visualizer import GraphVisualizer
 from .grammar import Grammar
 from .random_cgra_generator import RandomCgraGenerator
+from ..architectures.cgra import CgraArch as CGRAInterconnection
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,10 @@ def generate_recipes(max_difficulty: int) -> dict:
 
 class GenerationTask:
     """Manages the execution of a single generation task for a specific configuration."""
-
     def __init__(self, tec, gen_mode, k, difficulty, arch_sizes, cgra_params, graph_range, 
-                 recipe, k_range, no_extend_io, max_path_length, no_images, qca_arch):
+                 recipe, k_range, no_extend_io, max_path_length, no_images, qca_arch, 
+                 ii=None, output_dir='results', alpha=0.3, retries_multiplier=150):
+        """Initializes the Generation Task with all necessary parameters."""
         self.tec = tec
         self.gen_mode = gen_mode
         self.k = k
@@ -54,6 +56,10 @@ class GenerationTask:
         self.max_path_length = max_path_length
         self.no_images = no_images
         self.qca_arch = qca_arch
+        self.fixed_ii = ii
+        self.output_dir = output_dir
+        self.alpha = alpha
+        self.retries_multiplier = retries_multiplier
 
     def run(self) -> bool:
         """Runs the generation task based on the initialized parameters.
@@ -129,33 +135,38 @@ class GenerationTask:
         return saved_graph_count >= self.k
 
     def _run_cgra_random(self) -> bool:
-        """Executes random DFG generation for CGRA."""
+        """Executes random DFG generation for CGRA, now using the constructive logic."""
         logger.info(f"Starting random CGRA task: k={self.k}, graph_range={self.graph_range}")
         saved_graph_count = 0
         for i in range(self.k):
             try:
                 num_nodes = random.randint(self.graph_range[0], self.graph_range[1])
                 arch_size = random.choice(self.arch_sizes)
-                rows, cols = arch_size
-                II = int(ceil(num_nodes / (rows * cols))) if (rows * cols) > 0 else 1
+                row,col = arch_size
+                
+                II = ceil(num_nodes/(row * col))
 
-                generator = RandomCgraGenerator(
-                    dfg_size=num_nodes, II=II, cgra_dim=arch_size, bits=self.cgra_params['bits']
-                )
+                generator = RandomCgraGenerator(dfg_size=num_nodes, II=II, cgra_dim=arch_size, bits=self.cgra_params['bits'])
                 mapping_obj = generator.generate_mapping()
+                
+                if not mapping_obj:
+                    logger.warning("Random generator failed to produce a valid mapping.")
+                    continue
                 
                 final_graph = nx.DiGraph()
                 node_map = {}
                 for node_id, pos in mapping_obj.placement.items():
                     final_graph.add_node(tuple(pos))
                     node_map[node_id] = tuple(pos)
-                for (src_id, dst_id), path in mapping_obj.routing.items():
+                for (src_id, dst_id) in mapping_obj.routing.keys():
                     if src_id in node_map and dst_id in node_map:
                         final_graph.add_edge(node_map[src_id], node_map[dst_id])
                 
                 saved_graph_count += 1
                 logger.info(f"Valid random CGRA graph {saved_graph_count}/{self.k} generated. Saving...")
-                self._prepare_and_save(final_graph, "CGRA", "mappings_cgra_random", arch_size, saved_graph_count, bits=self.cgra_params['bits'])
+                
+                self._prepare_and_save(final_graph, "CGRA", "mappings_cgra_random", arch_size, saved_graph_count, name_prefix='add', bits=self.cgra_params['bits'])
+            
             except Exception as e:
                 logger.error(f"Error generating random CGRA map: {e}", exc_info=True)
         return saved_graph_count == self.k
@@ -190,11 +201,11 @@ class GenerationTask:
                 logger.error(f"Critical error during QCA grammar generation: {e}", exc_info=True)
         return saved_graph_count == self.k
 
-    def _prepare_and_save(self, graph, tec_name, base_folder, arch_size, index, **kwargs):
-        """Assigns logical names to nodes and triggers the save process."""
+    def _prepare_and_save(self, graph, tec_name, base_folder, arch_size, index, name_prefix: str = 'op', **kwargs):
+        """Assigns logical names with a specific prefix to nodes and triggers the save process."""
         for i, node_coord in enumerate(list(graph.nodes())):
-            graph.nodes[node_coord]['name'] = f'op_{i}'
-            graph.nodes[node_coord]['opcode'] = 'op' # Generic opcode
+            graph.nodes[node_coord]['name'] = f'{name_prefix}_{i}'
+            graph.nodes[node_coord]['opcode'] = name_prefix
         
         self._save_all_files(graph, tec_name, base_folder, arch_size, index, **kwargs)
 
@@ -226,39 +237,32 @@ class GenerationTask:
         self._save_mapping_as_json(graph, path_base, tec_name, arch_size, **kwargs)
 
     def _save_mapping_as_json(self, graph, path_base, tec_name, arch_size, **kwargs):
-        """Saves the mapping data to a JSON file."""
+        """Saves the mapping data to a JSON file, conditionally adding fields."""
         rows, cols = arch_size
         num_nodes = graph.number_of_nodes()
         mii = int(ceil(num_nodes / (rows * cols))) if (rows * cols) > 0 else 1
 
+        properties = {'node_count': num_nodes, 'edge_count': graph.number_of_edges(), 'II_required': mii}
+        # CORREÇÃO: Apenas adiciona difficulty e recipe se o modo for 'grammar'
+        if self.gen_mode == 'grammar':
+            properties['difficulty'] = self.difficulty
+            properties['recipe'] = self.recipe
+
         json_data = {
             'graph_name': os.path.basename(path_base),
-            'properties': {
-                'node_count': num_nodes, 
-                'edge_count': graph.number_of_edges(),
-                'II_required': mii,
-                'difficulty': self.difficulty,
-                'recipe': self.recipe
-            },
-            'architecture': {
-                'technology': tec_name,
-                'dimensions': list(arch_size),
-            },
-            'placement': {
-                graph.nodes[node].get('name'): list(node) for node in graph.nodes()
-            },
-            'edges': [
-                (graph.nodes[u].get('name'), graph.nodes[v].get('name')) for u, v in graph.edges()
-            ]
+            'properties': properties,
+            'architecture': {'technology': tec_name, 'dimensions': list(arch_size)},
+            'placement': {graph.nodes[node].get('name'): list(node) for node in graph.nodes()},
+            'edges': [(graph.nodes[u].get('name'), graph.nodes[v].get('name')) for u, v in graph.edges()]
         }
         if tec_name == "CGRA":
             json_data['architecture']['interconnect_bits'] = kwargs.get('bits')
 
         json_filename = f"{path_base}.json"
-        
         try:
             with open(json_filename, 'w') as f:
                 json.dump(json_data, f, indent=4)
             logger.info(f"JSON file saved to '{json_filename}'")
         except Exception as e:
             logger.error(f"Error saving JSON file: {e}")
+

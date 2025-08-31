@@ -1,17 +1,19 @@
+# scripts/runner.py
+
 import argparse
 import logging
 import os
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
-
-# Make the main package available for imports
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from mapping_generator.cli import create_parser
 from mapping_generator.generation.controller import GenerationTask, generate_recipes
+from scripts.post_process_cleaner import run_cleaning_process
 
 def run_single_generation(args):
-    """Executes a single, specific generation task based on CLI arguments."""
+    """Executes a single, specific generation task based on parsed arguments."""
     print("--- Running Single Generation Task ---")
     
     recipe = None
@@ -23,19 +25,13 @@ def run_single_generation(args):
             return
 
     task_params = {
-        'tec': args.tec,
-        'gen_mode': args.gen_mode,
-        'k': args.k_graphs,
-        'difficulty': args.difficulty,
-        'arch_sizes': [tuple(args.arch_size)],
-        'cgra_params': {'bits': args.bits},
-        'graph_range': tuple(args.graph_range),
-        'recipe': recipe,
-        'k_range': tuple(args.k_range),
-        'no_extend_io': args.no_extend_io,
-        'max_path_length': args.max_path_length,
-        'no_images': args.no_images,
-        'qca_arch': args.qca_arch
+        'tec': args.tec, 'gen_mode': args.gen_mode, 'k': args.k_graphs,
+        'difficulty': args.difficulty, 'arch_sizes': [tuple(args.arch_size)],
+        'cgra_params': {'bits': args.bits}, 'graph_range': tuple(args.graph_range),
+        'recipe': recipe, 'k_range': tuple(args.k_range), 'no_extend_io': args.no_extend_io,
+        'max_path_length': args.max_path_length, 'no_images': args.no_images,
+        'qca_arch': args.qca_arch, 'ii': args.ii, 'output_dir': args.output_dir,
+        'alpha': args.alpha, 'retries_multiplier': args.retries_multiplier
     }
 
     task = GenerationTask(**task_params)
@@ -65,7 +61,9 @@ def run_campaign_generation(args):
                         'difficulty': difficulty, 'arch_sizes': [arch],
                         'cgra_params': {'bits': bits}, 'graph_range': (size, size),
                         'recipe': recipe, 'k_range': (2, 3), 'no_extend_io': False,
-                        'max_path_length': 15, 'no_images': args.no_images, 'qca_arch': 'U'
+                        'max_path_length': 15, 'no_images': args.no_images, 
+                        'qca_arch': 'U', 'ii': None, 'output_dir': args.output_dir,
+                        'alpha': 0.3, 'retries_multiplier': 150
                     })
     
     print(f"Campaign Defined. Total of {len(tasks_params_list)} generation tasks to be executed.")
@@ -76,6 +74,7 @@ def run_campaign_generation(args):
 
     with ProcessPoolExecutor(max_workers=max_cores) as executor:
         futures = [executor.submit(run_task_in_worker, params) for params in tasks_params_list]
+        
         for i, future in enumerate(as_completed(futures)):
             print(f"Generation Progress: {i+1}/{len(tasks_params_list)} tasks completed.")
             try:
@@ -87,44 +86,29 @@ def run_campaign_generation(args):
     print(f"\n--- CAMPAIGN GENERATION COMPLETE ---")
     print(f"Total generation time: {(end_time - start_time) / 60:.2f} minutes.")
 
+    if args.clean:
+        print("\n--- STARTING AUTOMATIC ISOMORPHISM CLEANING ---")
+        source_dir = args.output_dir
+        cleaned_dir = f"{source_dir}_cleaned"
+        run_cleaning_process(source_dir, cleaned_dir)
+
 def run_task_in_worker(task_params):
     """Helper function to instantiate and run GenerationTask in a worker process."""
     task = GenerationTask(**task_params)
     return task.run()
 
 def main():
-    """Main function to parse arguments and launch the correct mode."""
-    parser = argparse.ArgumentParser(description="Mapping Generator for CGRA and QCA.")
-    subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
-
-    # --- Subcommand for a SINGLE run ---
-    parser_single = subparsers.add_parser('single', help='Run a single, specific generation task.')
-    parser_single.add_argument('--tec', type=str, default='cgra', choices=['cgra', 'qca'], help='Target technology.')
-    parser_single.add_argument('--gen-mode', type=str, default='grammar', choices=['grammar', 'random'], help='Generation mode.')
-    parser_single.add_argument('--k-graphs', type=int, default=10, help='Number of graphs to generate.')
-    parser_single.add_argument('--difficulty', type=int, default=1, help='Difficulty level for grammar-based generation.')
-    parser_single.add_argument('--arch-size', type=int, nargs=2, default=[4, 4], help='Architecture dimensions (rows cols).')
-    parser_single.add_argument('--graph-range', type=int, nargs=2, default=[8, 10], help='Min and max number of nodes for the DFG.')
-    parser_single.add_argument('--bits', type=str, default='1000', help='CGRA interconnection bits (mesh, diag, hop, tor).')
-    parser_single.add_argument('--k-range', type=int, nargs=2, default=[2, 3], help='K-range for grammar rules.')
-    parser_single.add_argument('--max-path-length', type=int, default=15, help='Max path length for routing.')
-    parser_single.add_argument('--qca-arch', type=str, default='U', choices=['U', 'R', 'T'], help='QCA architecture type.')
-    parser_single.add_argument('--no-extend-io', action='store_true', help='Disable I/O extension to border.')
-    parser_single.add_argument('--no-images', action='store_true', help='Disable PNG image generation.')
-    parser_single.set_defaults(func=run_single_generation)
-
-    # --- Subcommand for a CAMPAIGN run ---
-    parser_campaign = subparsers.add_parser('campaign', help='Run the full, parallel generation campaign.')
-    parser_campaign.add_argument('--no-images', action='store_true', help='If specified, disables PNG image generation.')
-    parser_campaign.add_argument('-v', '--verbose', action='store_true', help='Show detailed logs from the generation process.')
-    parser_campaign.set_defaults(func=run_campaign_generation)
-
+    """Main function to set up CLI, parse arguments, and launch the correct mode."""
+    parser = create_parser()
     args = parser.parse_args()
-    
+
     log_level = logging.DEBUG if hasattr(args, 'verbose') and args.verbose else logging.WARNING
     logging.basicConfig(level=log_level, format='[%(levelname)s][%(name)s] %(message)s')
 
-    args.func(args)
+    if args.command == 'single':
+        run_single_generation(args)
+    elif args.command == 'campaign':
+        run_campaign_generation(args)
 
 if __name__ == "__main__":
     main()
