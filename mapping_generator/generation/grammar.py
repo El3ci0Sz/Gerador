@@ -12,18 +12,7 @@ class Grammar:
     def __init__(self, architecture_graph: nx.DiGraph, border_nodes: set, grid_dim: tuple, 
                  target_size: int, recipe: dict, k_range: tuple, max_path_length: int, 
                  no_extend_io: bool):
-        """Initializes the Grammar engine.
-
-        Args:
-            architecture_graph (nx.DiGraph): The graph representing the target hardware.
-            border_nodes (set): A set of nodes on the physical border of the architecture.
-            grid_dim (tuple): The (rows, cols) dimensions of the grid.
-            target_size (int): The desired number of nodes for the final DFG.
-            recipe (dict): A dictionary specifying the required number of complex structures.
-            k_range (tuple): A (min, max) tuple for the number of branches in rules.
-            max_path_length (int): The maximum allowed length for any single path.
-            no_extend_io (bool): If True, disables post-processing to extend I/O to the border.
-        """
+        """Initializes the Grammar engine."""
         self.arch_graph = architecture_graph
         self.border_nodes = border_nodes
         self.grid_dim = grid_dim
@@ -39,16 +28,8 @@ class Grammar:
         self.convergences_created = 0
     
     def generate(self, growth_timeout: int = 200) -> nx.DiGraph | None:
-        """Main method to generate a graph according to the specified parameters.
-
-        Args:
-            growth_timeout (int): The maximum number of grammar steps before stopping.
-
-        Returns:
-            nx.DiGraph | None: The generated graph if successful, otherwise None.
-        """
+        """Main method to generate a graph according to the specified parameters."""
         if not list(self.arch_graph.nodes()): return None
-        
         available_nodes = list(set(self.arch_graph.nodes()) - self.used_nodes)
         if not available_nodes: return None
         
@@ -68,11 +49,15 @@ class Grammar:
         recipe_fulfilled = (self.reconvergences_created >= self.recipe.get('reconvergence', 0) and
                             self.convergences_created >= self.recipe.get('convergence', 0))
         
-        if len(self.used_nodes) >= self.target_size and recipe_fulfilled:
+        # --- CORREÇÃO CRÍTICA AQUI ---
+        # A condição agora é '==' para garantir o tamanho exato do grafo.
+        if len(self.used_nodes) == self.target_size and recipe_fulfilled:
             return self.placement_graph
         else:
             if not recipe_fulfilled:
-                logger.info("Mandatory recipe not fulfilled. Discarding graph.")
+                logger.debug("Mandatory recipe not fulfilled. Discarding graph.")
+            elif len(self.used_nodes) != self.target_size:
+                 logger.debug(f"Final graph size ({len(self.used_nodes)}) does not match target size ({self.target_size}). Discarding graph.")
             return None
 
     def _apply_pattern(self) -> bool:
@@ -106,130 +91,111 @@ class Grammar:
         return False
     
     def _tree_rule(self, budget: int) -> bool:
-        """Tries to add simple tree-like branches from an existing node."""
+        """Tries to add simple tree-like branches from multiple existing nodes."""
         if not self.used_nodes or budget < 1: return False
         
-        start_node = random.choice(list(self.used_nodes))
-        k_max_by_budget = budget 
-        k_max_allowed = min(self.k_range[1], k_max_by_budget)
-        if k_max_allowed < 1: return False
+        potential_start_nodes = list(self.used_nodes)
+        random.shuffle(potential_start_nodes)
+        max_start_node_attempts = 5 
         
-        k = random.randint(1, k_max_allowed)
-        
-        free_nodes = list(set(self.arch_graph.nodes()) - self.used_nodes - {start_node})
-        random.shuffle(free_nodes)
-        
-        paths, temp_claimed_nodes = [], set()
-        for target_node in free_nodes:
-            if len(paths) >= k: break
-            if target_node in temp_claimed_nodes: continue
+        for start_node in potential_start_nodes[:max_start_node_attempts]:
+            k_max_by_budget = budget 
+            k_max_allowed = min(self.k_range[1], k_max_by_budget)
+            if k_max_allowed < 1: continue
+            k = random.randint(1, k_max_allowed)
+            
+            free_nodes = list(set(self.arch_graph.nodes()) - self.used_nodes - {start_node})
+            random.shuffle(free_nodes)
+            
+            paths = []
+            newly_claimed_in_this_call = set()
+            for target_node in free_nodes:
+                if len(paths) >= k: break
+                path = self._find_shortest_path(start_node, target_node, newly_claimed_in_this_call)
+                if path:
+                    new_nodes_from_path = set(path) - self.used_nodes
+                    if len(newly_claimed_in_this_call.union(new_nodes_from_path)) <= budget:
+                        paths.append(path)
+                        newly_claimed_in_this_call.update(new_nodes_from_path)
+            
+            if paths:
+                self._add_paths_to_placement(paths, f"Tree (k={len(paths)})")
+                return True
 
-            path = self._find_shortest_path(start_node, target_node, temp_claimed_nodes)
-            if path:
-                new_nodes = set(path) - self.used_nodes
-                if len(temp_claimed_nodes) + len(new_nodes) <= budget:
-                    paths.append(path)
-                    temp_claimed_nodes.update(path)
-        
-        if paths:
-            self._add_paths_to_placement(paths, f"Tree (k={len(paths)})")
-            return True
-        
+        logger.debug("Tree rule failed: could not find valid branches from multiple start nodes.")
         return False
 
     def _convergence_rule(self, budget: int) -> bool:
         """Tries to create a convergence pattern towards an existing node."""
         min_cost = self.k_range[0]
         if not self.used_nodes or budget < min_cost: return False
-        
         target_node = random.choice(list(self.used_nodes))
-        
         k_max_allowed = min(self.k_range[1], budget)
         if k_max_allowed < self.k_range[0]: return False
-        
         k = random.randint(self.k_range[0], k_max_allowed)
-        
         source_pool = list(set(self.arch_graph.nodes()) - self.used_nodes - {target_node})
         random.shuffle(source_pool)
 
-        paths, temp_claimed_nodes = [], set()
+        paths = []
+        newly_claimed_in_this_call = set()
         for source_node in source_pool:
             if len(paths) >= k: break
-            if source_node in temp_claimed_nodes: continue
-            
-            path = self._find_shortest_path(source_node, target_node, temp_claimed_nodes)
+            path = self._find_shortest_path(source_node, target_node, newly_claimed_in_this_call)
             if path:
-                new_nodes = set(path) - self.used_nodes
-                if len(temp_claimed_nodes) + len(new_nodes) <= budget:
+                new_nodes_from_path = set(path) - self.used_nodes
+                if len(newly_claimed_in_this_call.union(new_nodes_from_path)) <= budget:
                     paths.append(path)
-                    temp_claimed_nodes.update(path)
-        
+                    newly_claimed_in_this_call.update(new_nodes_from_path)
+
         if len(paths) >= self.k_range[0]:
             self._add_paths_to_placement(paths, f"Convergence (k={len(paths)})")
             self.convergences_created += 1
             return True
-        
         return False
 
+    # ... (O resto dos métodos permanecem os mesmos) ...
     def _reconvergence_rule(self, budget: int) -> bool:
-        """Tries to create a reconvergence pattern between two nodes."""
-        # A reconvergence requires at least k new nodes plus one new endpoint.
         min_cost = self.k_range[0] + 1
         if not self.used_nodes or budget < min_cost: return False
-
         k_max_allowed = min(self.k_range[1], budget - 1)
         if k_max_allowed < self.k_range[0]: return False
         k = random.randint(self.k_range[0], k_max_allowed)
-        
         start_node = random.choice(list(self.used_nodes))
         target_pool = list(set(self.arch_graph.nodes()) - self.used_nodes - {start_node})
         random.shuffle(target_pool)
-        
         for target_node in target_pool:
-            # This is a complex helper that would need to find multiple disjoint paths
             paths_found = self._find_disjoint_paths(start_node, target_node, k, budget)
             if paths_found:
                 self._add_paths_to_placement(paths_found, f"Reconvergence (k={len(paths_found)})")
                 self.reconvergences_created += 1
                 return True
         return False
-
+        
     def _find_shortest_path(self, source, target, extra_nodes_to_avoid=None) -> list | None:
-        """Finds the shortest path, avoiding nodes already in the placement graph."""
         try:
             nodes_to_avoid = self.used_nodes.copy()
             if extra_nodes_to_avoid:
                 nodes_to_avoid.update(extra_nodes_to_avoid)
             nodes_to_avoid -= {source, target}
-            
             subgraph = self.arch_graph.copy()
             subgraph.remove_nodes_from(nodes_to_avoid)
-
             path = nx.shortest_path(subgraph, source=source, target=target)
-            
             return path if path and (len(path) - 1 <= self.max_path_length) else None
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return None
 
     def _find_disjoint_paths(self, source, target, k, budget) -> list | None:
-        """A placeholder for a more complex multi-path finding algorithm."""
-        # This is a highly complex problem. For this refactoring, we use a simplified
-        # placeholder. A real implementation would need a sophisticated algorithm.
         try:
             subgraph = self.arch_graph.copy()
             subgraph.remove_nodes_from(self.used_nodes - {source, target})
-            
-            # This is a simplification; it doesn't guarantee paths are fully disjoint
-            # or respect budget perfectly, but serves as a functional placeholder.
             paths = list(nx.all_shortest_paths(subgraph, source, target))
             if len(paths) >= k:
-                return random.sample(paths, k) # Return k random shortest paths
+                return random.sample(paths, k)
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return None
         return None
 
     def _add_paths_to_placement(self, paths: list, rule_name: str):
-        """Adds a list of paths to the placement graph and updates used nodes."""
         if not paths: return
         logger.debug(f"Commit: Rule '{rule_name}' adding {len(paths)} path(s).")
         for path in paths:

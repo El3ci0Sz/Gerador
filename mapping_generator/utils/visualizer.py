@@ -57,7 +57,7 @@ class GraphVisualizer:
                         if len(levels[level]) > 1:
                             f.write(f"    {{ rank = same; {nodes_in_level} }}\n")
                 f.write("}\n")
-            logger.info(f"Custom .dot file saved to '{dot_filename}'")
+            #logger.info(f"Custom .dot file saved to '{dot_filename}'")
         except Exception as e:
             logger.error(f"Error writing custom .dot file: {e}")
             return
@@ -67,6 +67,6 @@ class GraphVisualizer:
             base_name = os.path.splitext(output_image_filename)[0]
             command = f"dot -Tpng {dot_filename} -o {base_name}.png"
             os.system(command)
-            logger.info(f"Logical layout image saved to '{base_name}.png'")
+            #logger.info(f"Logical layout image saved to '{base_name}.png'")
         except Exception as e:
            logger.error(f"Error generating image with Graphviz: {e}")

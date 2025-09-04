@@ -4,16 +4,18 @@ import argparse
 import logging
 import os
 import time
-import sys
-
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from mapping_generator.cli import create_parser
 from mapping_generator.generation.controller import GenerationTask, generate_recipes
 from scripts.post_process_cleaner import run_cleaning_process
 
 def run_single_generation(args):
     """Executes a single, specific generation task based on parsed arguments."""
+    # (Esta função permanece a mesma)
     print("--- Running Single Generation Task ---")
     
     recipe = None
@@ -39,49 +41,73 @@ def run_single_generation(args):
     print("--- Single Generation Task Finished ---")
 
 def run_campaign_generation(args):
-    """Executes the full, parallel campaign to generate a large dataset."""
-    print("--- Running Campaign Generation ---")
+    """Executes the full, parallel campaign, filtering out impossible tasks."""
+    print("--- Running II=1 and II=2 Benchmark Campaign ---")
     
-    GRAPHS_PER_DIFFICULTY = 500
+    start_time = time.time()
+    
+    FIXED_IIS = [1, 2]
+    GRAPHS_PER_DIFFICULTY = 250
     MAX_DIFFICULTY = 20
     GRAPH_SIZES_TO_GENERATE = list(range(3, 17))
     ARCH_SIZES = [(4, 4), (8, 8)]
-    BIT_CONFIGS = ['1000', '1111']
-    GRAPHS_PER_DIFFICULTY_SMALL = 50
+    CONNECTION_STYLES = {'mesh': '1000', 'all': '1111'} 
+    GRAPHS_PER_DIFFICULTY_SMALL = 25
+    K_RANGE_MIN = 2 # O valor mínimo de k para as regras da gramática
     recipes = generate_recipes(MAX_DIFFICULTY)
 
     tasks_params_list = []
-    for size in GRAPH_SIZES_TO_GENERATE:
-        for arch in ARCH_SIZES:
-            for bits in BIT_CONFIGS:
-                num_graphs = GRAPHS_PER_DIFFICULTY if size > 5 else GRAPHS_PER_DIFFICULTY_SMALL
-                for difficulty, recipe in recipes.items():
-                    tasks_params_list.append({
-                        'tec': 'cgra', 'gen_mode': 'grammar', 'k': num_graphs,
-                        'difficulty': difficulty, 'arch_sizes': [arch],
-                        'cgra_params': {'bits': bits}, 'graph_range': (size, size),
-                        'recipe': recipe, 'k_range': (2, 3), 'no_extend_io': False,
-                        'max_path_length': 15, 'no_images': args.no_images, 
-                        'qca_arch': 'U', 'ii': None, 'output_dir': args.output_dir,
-                        'alpha': 0.3, 'retries_multiplier': 150
-                    })
+    skipped_capacity = 0
+    skipped_impossible = 0
+
+    for fixed_ii in FIXED_IIS:
+        for size in GRAPH_SIZES_TO_GENERATE:
+            for arch in ARCH_SIZES:
+                rows, cols = arch
+                if size > (rows * cols * fixed_ii):
+                    skipped_capacity += 1
+                    continue
+                
+                for conn_name, bits in CONNECTION_STYLES.items():
+                    num_graphs = GRAPHS_PER_DIFFICULTY if size > 5 else GRAPHS_PER_DIFFICULTY_SMALL
+                    for difficulty, recipe in recipes.items():
+                        
+                        # --- NOVO FILTRO DE VIABILIDADE DA RECEITA ---
+                        r = recipe.get('reconvergence', 0)
+                        c = recipe.get('convergence', 0)
+                        
+                        # Custo mínimo de nós = 1 (inicial) + custo das reconvergências + custo das convergências
+                        min_nodes_needed = 1 + (r * (K_RANGE_MIN + 1)) + (c * K_RANGE_MIN)
+                        
+                        if size < min_nodes_needed:
+                            skipped_impossible += 1
+                            continue # Pula esta dificuldade, pois é impossível
+                        # --- FIM DO FILTRO ---
+
+                        tasks_params_list.append({
+                            'tec': 'cgra', 'gen_mode': 'grammar', 'k': num_graphs,
+                            'difficulty': difficulty, 'arch_sizes': [arch],
+                            'cgra_params': {'bits': bits}, 'graph_range': (size, size),
+                            'recipe': recipe, 'k_range': (K_RANGE_MIN, 3), 'no_extend_io': False,
+                            'max_path_length': 15, 'no_images': args.no_images, 
+                            'qca_arch': 'U', 'ii': fixed_ii, 
+                            'output_dir': args.output_dir,
+                            'alpha': 0.3, 'retries_multiplier': 150
+                        })
     
-    print(f"Campaign Defined. Total of {len(tasks_params_list)} generation tasks to be executed.")
+    print(f"Campaign Defined. Total of {len(tasks_params_list)} tasks to be executed.")
+    print(f"({skipped_capacity} tasks skipped for capacity, {skipped_impossible} tasks skipped as impossible recipes)")
     
-    start_time = time.time()
     max_cores = os.cpu_count()
     print(f"Starting ProcessPoolExecutor with {max_cores} workers...")
 
     with ProcessPoolExecutor(max_workers=max_cores) as executor:
         futures = [executor.submit(run_task_in_worker, params) for params in tasks_params_list]
-        
         for i, future in enumerate(as_completed(futures)):
             print(f"Generation Progress: {i+1}/{len(tasks_params_list)} tasks completed.")
-            try:
-                future.result()
-            except Exception as e:
-                logging.critical(f"A worker task generated a fatal error: {e}", exc_info=True)
-
+            try: future.result()
+            except Exception as e: logging.critical(f"A worker task generated a fatal error: {e}", exc_info=True)
+    
     end_time = time.time()
     print(f"\n--- CAMPAIGN GENERATION COMPLETE ---")
     print(f"Total generation time: {(end_time - start_time) / 60:.2f} minutes.")
@@ -101,10 +127,8 @@ def main():
     """Main function to set up CLI, parse arguments, and launch the correct mode."""
     parser = create_parser()
     args = parser.parse_args()
-
     log_level = logging.DEBUG if hasattr(args, 'verbose') and args.verbose else logging.WARNING
     logging.basicConfig(level=log_level, format='[%(levelname)s][%(name)s] %(message)s')
-
     if args.command == 'single':
         run_single_generation(args)
     elif args.command == 'campaign':
