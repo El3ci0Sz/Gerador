@@ -3,7 +3,8 @@
 import networkx as nx
 
 class QCA:
-    """Generates connectivity graphs for QCA architectures.
+    """
+    Generates connectivity graphs for QCA architectures.
 
     This class creates a base graph representing all possible directional
     connections for a given physical QCA architecture and clocking scheme.
@@ -35,10 +36,8 @@ class QCA:
         ]
 
     def get_graph(self) -> nx.DiGraph:
-        """Gets the generated connectivity graph.
-
-        This is the main public method to retrieve the final architecture graph
-        representing all valid connections based on the clocking scheme.
+        """
+        Gets the generated connectivity graph.
 
         Returns:
             nx.DiGraph: The directed graph of the QCA architecture.
@@ -47,11 +46,14 @@ class QCA:
 
     def _generate_connectivity_graph(self) -> nx.DiGraph:
         """Builds the directed graph based on the selected clocking scheme."""
+
         graph = nx.DiGraph()
         all_nodes = [(r, c) for r in range(self.dim[0]) for c in range(self.dim[1])]
 
         for node in all_nodes:
+
             valid_neighbors = set()
+
             if self.arch_type == "U":
                 valid_neighbors = self._get_neighbors_by_clock_flow(node, self._get_use_clock_zone)
             elif self.arch_type == "T":
@@ -63,6 +65,7 @@ class QCA:
 
             for neighbor in valid_neighbors:
                 graph.add_edge(node, neighbor)
+
         return graph
 
     def _is_valid_node(self, node: tuple) -> bool:

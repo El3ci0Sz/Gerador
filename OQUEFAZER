@@ -10,3 +10,16 @@
 -Nova classe para complixidade tirar do map controler e fazer um controlador de complexidade
 -(opicional) Fazer mais testes
 -O gerador produz, por exemplo, grafos de tamanho 4 em uma arquitetura 4x4 com II=2?
+
+
+
+Testes:
+-Conferir a classe qca, para ver se os grafos sao gerados devidamente, e as conexões tambem para diferentes tamanhos de garfos.
+-USE, RES, 2DDWAVE
+
+-Fazer testes unitarios para cada um dos metodos.
+
+-Esse 2DDWAVE pode estar errado conferir o clock scheme
+
+
+-Testes para o cgra tambem, no mesmo estilo

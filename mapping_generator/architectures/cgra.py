@@ -16,10 +16,10 @@ class CgraArch:
         Args:
             dimensions (tuple): The (rows, cols) dimensions of the CGRA grid.
             interconnect_bits (str): A 4-bit string "mdht" representing:
-                                     'm': mesh (Von Neumann neighbors)
-                                     'd': diagonal (Moore neighbors)
-                                     'h': one-hop (knight moves)
-                                     't': toroidal connections
+                                     'm': mesh 
+                                     'd': diagonal 
+                                     'h': one-hop 
+                                     't': toroidal 
             ii (int): The Initiation Interval, representing the time dimension.
         """
         self.rows, self.cols = dimensions
@@ -42,40 +42,56 @@ class CgraArch:
         return graph
 
     def _add_interconnections(self):
-        """Adds edges to the graph based on the 4-bit configuration."""
+        """Adds all configured connections for every node in the graph."""
         mesh, diagonal, one_hop, toroidal = [bool(int(b)) for b in self.bits]
         
         for t in range(self.ii):
             for r in range(self.rows):
                 for c in range(self.cols):
                     source_node = (r, c, t)
-                    
-                    if self.ii > 1:
-                        target_time_node = (r, c, (t + 1) % self.ii)
-                        self.graph.add_edge(source_node, target_time_node)
+                    self._add_temporal_connections(source_node)
+                    self._add_spatial_connections(source_node, mesh, diagonal, one_hop)
 
-                    potential_neighbors = []
-                    if mesh:
-                        potential_neighbors.extend([(r+1, c), (r-1, c), (r, c+1), (r, c-1)])
-                    if diagonal:
-                        potential_neighbors.extend([(r+1, c+1), (r+1, c-1), (r-1, c+1), (r-1, c-1)])
-                    if one_hop:
-                        potential_neighbors.extend([(r+2, c), (r-2, c), (r, c+2), (r, c-2)])
-                    
-                    for nr, nc in potential_neighbors:
-                        if 0 <= nr < self.rows and 0 <= nc < self.cols:
-                            self.graph.add_edge(source_node, (nr, nc, t))
+                    self._add_toroidal_connections(source_node, toroidal)
 
-                    if toroidal:
-                        tor_neighbors = [
-                            ((r + 1) % self.rows, c), 
-                            ((r - 1 + self.rows) % self.rows, c), 
-                            (r, (c + 1) % self.cols), 
-                            (r, (c - 1 + self.cols) % self.cols)
-                        ]
-                        for nr, nc in tor_neighbors:
-                            if not self.graph.has_edge(source_node, (nr, nc, t)):
-                                self.graph.add_edge(source_node, (nr, nc, t))
+    def _add_temporal_connections(self, source_node: tuple):
+        """Adds edges from a node to itself in the next time step for pipelining."""
+        if self.ii > 1:
+            r, c, t = source_node
+            target_time_node = (r, c, (t + 1) % self.ii)
+            self.graph.add_edge(source_node, target_time_node)
+
+    def _add_spatial_connections(self, source_node: tuple, mesh: bool, diagonal: bool, one_hop: bool):
+        """Adds standard spatial connections (mesh, diagonal, one-hop) from a source node."""
+        r, c, t = source_node
+        potential_neighbors = []
+        if mesh:
+            potential_neighbors.extend([(r+1, c), (r-1, c), (r, c+1), (r, c-1)])
+        if diagonal:
+            potential_neighbors.extend([(r+1, c+1), (r+1, c-1), (r-1, c+1), (r-1, c-1)])
+        if one_hop:
+            potential_neighbors.extend([(r+2, c), (r-2, c), (r, c+2), (r, c-2)])
+        
+        for nr, nc in potential_neighbors:
+            if 0 <= nr < self.rows and 0 <= nc < self.cols:
+                self.graph.add_edge(source_node, (nr, nc, t))
+
+    def _add_toroidal_connections(self, source_node: tuple, toroidal: bool):
+        """Adds toroidal (wrap-around) connections from a source node."""
+        if not toroidal:
+            return
+            
+        r, c, t = source_node
+        tor_neighbors = [
+            ((r + 1) % self.rows, c), 
+            ((r - 1 + self.rows) % self.rows, c), 
+            (r, (c + 1) % self.cols), 
+            (r, (c - 1 + self.cols) % self.cols)
+        ]
+        for nr, nc in tor_neighbors:
+            target_node = (nr, nc, t)
+            if not self.graph.has_edge(source_node, target_node):
+                self.graph.add_edge(source_node, target_node)
     
     def get_border_nodes(self) -> set:
         """Returns a set of all nodes on the physical border of the CGRA.
